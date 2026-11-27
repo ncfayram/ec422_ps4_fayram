@@ -53,3 +53,23 @@ liquor_fit |>
   select(arima) |>
   augment() |>
   features(.innov, ljung_box, lag = 24, dof = 6)
+
+#Horse Race
+liquor_cv <- liquor |>
+  stretch_tsibble(.init = 120, .step = 1) |>
+  filter(.id < max(.id))
+
+liquor_cv_fit <- liquor_cv |>
+  model(snaive = SNAIVE(Sales),
+        ets    = ETS(log(Sales)),
+        arima  = ARIMA(log(Sales)))
+
+saveRDS(liquor_cv_fit, "results/liquor_cv_fit.rds")
+#There will be 215 forecast origins
+liquor_cv_fc <- liquor_cv_fit |>
+forecast(h = 1)
+
+liquor_cv_fc |>
+  accuracy(liquor, measures = list(RMSE = RMSE, MAE = MAE))
+#The first forecast Occurs in Jan 2002 and the final forecast occurs in November 2019.
+#The ARIMA model forecasts better. It has a lower measure of both RMSE and MAE than the ETS and benchmark models.

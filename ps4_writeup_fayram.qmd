@@ -9,3 +9,7 @@ editor: visual
 <https://github.com/ncfayram/ec422_ps4_fayram.git>
 
 ## 
+
+```{r}
+liquor_cv_fc |> accuracy(liquor, measures = list(RMSE = RMSE, MAE = MAE))|> knitr::kable(digits = 2)
+```
