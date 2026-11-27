@@ -163,3 +163,57 @@ rmse_by_var <- function(f) sqrt(colMeans((actual - f)^2))
 rmse_by_var(fc_var1)
 rmse_by_var(fc_var4)
 #The VAR(1) forecasts better than the VAR(4) for every variable except inflation. Because VAR(1) is a special case of VAR(4), it is able to fit the specific parts of the model without having to include the noisier parts that would also be included in VAR(4).
+
+#BVARs
+bvar_cv <- function(lambda) {
+  pr <- bv_priors(hyper = "lambda",
+                  mn = bv_mn(lambda = bv_lambda(mode = lambda, sd = 0.4,
+                                                min = 0.999 * lambda,
+                                                max = 1.001 * lambda),
+                             b = 0))
+  fc <- NULL
+  for (T in origins) {
+    fit_T <- bvar(y[1:T, ], lags = 4, priors = pr,
+                  n_draw = 2000, n_burn = 1000, verbose = FALSE)
+    x <- c(1, t(y[T:(T - 3), ]))         # constant and 4 lags of each variable
+    fc <- rbind(fc, x %*% coef(fit_T))   # forecast of y_{T+1}
+  }
+  fc
+}
+
+set.seed(422)
+fc_bvar_03 <- bvar_cv(0.3)
+saveRDS(fc_bvar_03, "results/fc_bvar_03.rds")
+
+set.seed(422)
+fc_bvar_005 <- bvar_cv(0.05)
+
+var_results <- tibble(
+  Variable = colnames(y),
+  `VAR(1)` = rmse_by_var(fc_var1),
+  `VAR(4)` = rmse_by_var(fc_var4),
+  `BVAR(4), lambda = 0.3` = rmse_by_var(fc_bvar_03),
+  `BVAR(4), lambda = 0.05` = rmse_by_var(fc_bvar_005)
+)
+
+saveRDS(var_results, "results/var_results.rds")
+
+var_results |> knitr::kable(digits = 3)
+#VAR(4) performed better for 7/8 variables than the BVAR(4), with lambda = 0.3. The difference is likely due to inaccuracies in the prior men which biased the estimates incorrectly.
+#It performed better than VAR(1) for 3/8 variables.
+# The RMSE grows when we move lambda from 0.3 to 0.05. This tells us that heavy shrinkage past a certain point is detrimental to our estimates.
+# The OLS is still a fair predictor of the data generating process, because this comparison tells us that the prior does not accurately bias the coefficient estimates.
+
+#DM-Test GDP
+e_var4 <- actual[, "gdp"] - fc_var4[, 1]
+e_bvar <- actual[, "gdp"] - fc_bvar_03[, 1]
+
+forecast::dm.test(e_var4, e_bvar, h = 1, power = 2)
+#The p-value is < 0.05 meaning we can reject the null hypothesis that VAR(4) and BVAR(4), lambda = 0.3 are equally accurate predictors of gdp.
+# This confirms what I saw in part 4.3b that VAR(4) is a more accurate predictor than BVAR(4).
+e_var4 <- actual[, "inv"] - fc_var4[, 1]
+e_bvar <- actual[, "inv"] - fc_bvar_03[, 1]
+
+forecast::dm.test(e_var4, e_bvar, h = 1, power = 2)
+#The p-value is 0.08 meaning that we fail to reject the null hypothesis that VAR(4) and BVAR(4), lambda = 0.3 are equally accurate predictors of inv.
+
