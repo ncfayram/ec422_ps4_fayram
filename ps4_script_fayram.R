@@ -1,0 +1,55 @@
+library(tidyverse)
+library(fpp3)
+library(BVAR)
+
+#load data
+liquor_raw <- read_csv(
+  "data/MRTSSM4453USN.csv",
+  na = ".",
+  col_types = cols(
+    observation_date = col_date(format = "%Y-%m-%d"),
+    MRTSSM4453USN = col_double()
+  )
+)
+
+#build tibble
+liquor <- liquor_raw |>
+  transmute(
+    Month = yearmonth(observation_date),
+    Sales = MRTSSM4453USN
+  ) |>
+  as_tsibble() |>
+  filter(Month <= yearmonth("2019 Dec"))
+
+has_gaps(liquor)
+
+
+#autoplot
+autoplot(liquor)
+
+gg_season(liquor, y = Sales) +
+  geom_line() +
+  labs(
+    title = "Liquor Sales by Month",
+    x = "Month",
+    y = "Sales in Millions of USD"
+  ) +
+  theme_minimal()
+## The seasonal plot shows an overall upward trend over the coarse of the year. It seems to be a consistent pattern with just the level growing each year. There is an initial crest in liquor sales around the summer months of July and August, and another spike at the end of each year in December.
+
+liquor_fit <- liquor |>
+  model(arima = ARIMA(log(Sales)),
+        ets   = ETS(log(Sales)))
+
+liquor_fit |> select(arima) |> report()
+liquor_fit |> select(ets) |> report()
+#The chosen ARIMA is a (1,0,2)(2,1,1). This means that the first lag has significant autocorrelation, and the q value of 2 means shocks effect the series for 2 periods after. The series includes 2 seasonal lags of the differenced series, there is 1 seasonal difference applied, and the model includes 1 seasonal lag of white noise shock.
+#The chosen ETS is an (A,A,A), meaning that the error, trend, and seasonal components are all additive and don't interact.
+
+liquor_fit |> select(arima) |> gg_tsresiduals()
+#The residuals look like they have pretty substantial autocorrelation but they do appear to average to zero.
+
+liquor_fit |>
+  select(arima) |>
+  augment() |>
+  features(.innov, ljung_box, lag = 24, dof = 6)
