@@ -73,3 +73,29 @@ liquor_cv_fc |>
   accuracy(liquor, measures = list(RMSE = RMSE, MAE = MAE))
 #The first forecast Occurs in Jan 2002 and the final forecast occurs in November 2019.
 #The ARIMA model forecasts better. It has a lower measure of both RMSE and MAE than the ETS and benchmark models.
+
+#Diebold-Mariano Test: ARIMA vs. ETS
+liquor_errs <- liquor_cv_fc |>
+  as_tibble() |>
+  left_join(as_tibble(liquor) |> select(Month, actual = Sales),
+            by = "Month") |>
+  mutate(e = actual - .mean) |>
+  select(Month, .model, e) |>
+  pivot_wider(names_from = .model, values_from = e)
+
+forecast::dm.test(liquor_errs$arima, liquor_errs$ets, h = 1, power = 2)
+#DM stat = -2.9062, p-value = 0.004042
+
+#Diebold-Mariano Test: ARIMA vs. SNAIVE
+liquor_errs2 <- liquor_cv_fc |>
+  as_tibble() |>
+  left_join(as_tibble(liquor) |> select(Month, actual = Sales),
+            by = "Month") |>
+  mutate(e = actual - .mean) |>
+  select(Month, .model, e) |>
+  pivot_wider(names_from = .model, values_from = e)
+
+forecast::dm.test(liquor_errs2$arima, liquor_errs2$snaive, h = 1, power = 2)
+#DM stat = -10.755, p-value < 2.2e-16
+
+#These DM tests show that the ARIMA model performs significantly better than the ETS model, confirming what we saw in the horse race. ARIMA also fits better than the SNAIVE model by a dramatic amount. Knowing this, I would use the ARIMA model on this dataset.
