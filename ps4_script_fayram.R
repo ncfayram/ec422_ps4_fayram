@@ -209,11 +209,102 @@ e_var4 <- actual[, "gdp"] - fc_var4[, 1]
 e_bvar <- actual[, "gdp"] - fc_bvar_03[, 1]
 
 forecast::dm.test(e_var4, e_bvar, h = 1, power = 2)
-#The p-value is < 0.05 meaning we can reject the null hypothesis that VAR(4) and BVAR(4), lambda = 0.3 are equally accurate predictors of gdp.
+#The p-value is 0.03 meaning we can reject the null hypothesis that VAR(4) and BVAR(4), lambda = 0.3 are equally accurate predictors of gdp.
 # This confirms what I saw in part 4.3b that VAR(4) is a more accurate predictor than BVAR(4).
-e_var4 <- actual[, "inv"] - fc_var4[, 1]
-e_bvar <- actual[, "inv"] - fc_bvar_03[, 1]
+e_var4 <- actual[, "inv"] - fc_var4[, 3]
+e_bvar <- actual[, "inv"] - fc_bvar_03[, 3]
 
 forecast::dm.test(e_var4, e_bvar, h = 1, power = 2)
-#The p-value is 0.08 meaning that we fail to reject the null hypothesis that VAR(4) and BVAR(4), lambda = 0.3 are equally accurate predictors of inv.
+#The p-value is 0.1065 meaning that we fail to reject the null hypothesis that VAR(4) and BVAR(4), lambda = 0.3 are equally accurate predictors of inv.
 
+md_raw <- read_csv("data/fredmd_2026-09.csv", show_col_types = FALSE)
+tcode <- unlist(md_raw[1, -1])
+md <- md_raw[-1, ] |> mutate(date = as.Date(sasdate, "%m/%d/%Y"))
+
+transform_series <- function(x, code) {
+  d <- function(v) c(NA, diff(v))
+  switch(as.character(code),
+         "1" = x,                      # level
+         "2" = d(x),                   # first difference
+         "3" = d(d(x)),                # second difference
+         "4" = log(x),                 # log
+         "5" = 100 * d(log(x)),        # growth rate
+         "6" = 100 * d(d(log(x))),     # change in the growth rate
+         "7" = d(x / dplyr::lag(x) - 1))
+}
+
+fm <- map2_dfc(md[names(tcode)], tcode, transform_series) |>
+  mutate(date = md$date, .before = 1) |>
+  filter(date >= as.Date("1960-03-01"), date <= as.Date("2019-12-01"))
+
+fm <- fm[, colSums(is.na(fm)) == 0]
+
+dim(fm)
+# INDPRO and PAYEMS are transformed as growth rates, CPIAUCSL is transformed to changes in growth rates, and FEDFUNDS is first differenced. The difference in transformations for INDPRO and FEDFUNDS is likely due to the fact that the federal funds rate is already measured as a percentage whereas industy production is measured as a quantity.
+
+#Principal components
+Z <- fm |> select(-date) |> as.matrix()
+
+pc <- prcomp(scale(Z))
+
+summary(pc)$importance[, 1:5]
+#The first 3 components make up 29.45% of the variation in the series.
+
+F1 <- pc$x[, 1] * sign(cor(pc$x[, 1], fm$INDPRO))
+
+tibble(date = fm$date, F1 = F1) |>
+  ggplot(aes(date, F1)) +
+  geom_line() +
+  labs(title = "First Factor from FRED-MD", x = NULL, y = NULL) +
+  theme_minimal()
+
+sort(abs(cor(pc$x[, 1], Z))[1, ], decreasing = TRUE)[1:8]
+sort(abs(cor(pc$x[, 2], Z))[1, ], decreasing = TRUE)[1:8]
+#The first factor seems to capture something closely related to production.
+#The second series seems to be related to consumption expenditures.
+
+#Horse Race
+ip <- fm$INDPRO
+n <- nrow(Z)
+init <- which(fm$date == as.Date("1989-12-01"))
+
+e_ar <- NULL
+e_fa <- NULL
+for (T in init:(n - 1)) {
+  F_T <- prcomp(scale(Z[1:T, ]))$x[, 1:3]         # factors using data through T
+  d <- data.frame(y_next = ip[2:T], y = ip[1:(T - 1)], F_T[1:(T - 1), ])
+  new <- data.frame(y = ip[T], t(F_T[T, ]))
+  e_ar <- c(e_ar, ip[T + 1] - predict(lm(y_next ~ y, d), new))
+  e_fa <- c(e_fa, ip[T + 1] - predict(lm(y_next ~ ., d), new))
+}
+
+c(RMSE_AR = sqrt(mean(e_ar^2)), RMSE_FA = sqrt(mean(e_fa^2)))
+#That would be cheating because it uses information that wouldn't have been available at the time we are forecasting from.
+
+direct_race <- function(series, h = 12, r = 3) {
+  lv <- md |>
+    mutate(log_x = log(.data[[series]]),
+           g = 100 * (log_x - lag(log_x))) |>
+    filter(date >= as.Date("1960-03-01"), date <= as.Date("2019-12-01"))
+  yh <- 100 * (lead(lv$log_x, h) - lv$log_x)      # growth over the next h months
+  g  <- lv$g                                      # growth over the latest month
+  
+  e_ar <- NULL
+  e_fa <- NULL
+  for (T in init:(n - h)) {
+    F_T <- prcomp(scale(Z[1:T, ]))$x[, 1:r, drop = FALSE]
+    i <- 1:(T - h)
+    d <- data.frame(yh = yh[i], g = g[i], F_T[i, , drop = FALSE])
+    new <- data.frame(g = g[T], F_T[T, , drop = FALSE])
+    e_ar <- c(e_ar, yh[T] - predict(lm(yh ~ g, d), new))
+    e_fa <- c(e_fa, yh[T] - predict(lm(yh ~ ., d), new))
+  }
+  tibble(series, forecasts = length(e_ar),
+         RMSE_AR = sqrt(mean(e_ar^2)), RMSE_FA = sqrt(mean(e_fa^2)),
+         MAE_AR = mean(abs(e_ar)), MAE_FA = mean(abs(e_fa)),
+         DM_pvalue = forecast::dm.test(e_ar, e_fa, h = h, power = 2,
+                                       varestimator = "bartlett")$p.value)
+}
+
+direct_race("CPIAUCSL")
+#The factors do improve the models. The RMSE is decreased by 10.43%.The difference is statistically significant given that the DM p-value is below 0.05.
